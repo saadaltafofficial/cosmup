@@ -1,3 +1,3 @@
-module github.com/ignismeow/cosmup
+module github.com/saadaltafofficial/cosmup
 
 go 1.22

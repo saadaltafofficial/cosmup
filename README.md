@@ -7,7 +7,7 @@ Cosmos chain binaries don't update themselves, and cosmovisor only manages binar
 ## Install
 
 ```sh
-go install github.com/ignismeow/cosmup@latest
+go install github.com/saadaltafofficial/cosmup@latest
 
 # Add to your shell rc. ~/.cosmup/bin goes first so cosmup's binaries win over
 # older copies elsewhere on PATH; $(go env GOPATH)/bin is where go install put cosmup.

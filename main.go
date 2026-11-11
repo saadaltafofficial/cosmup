@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ignismeow/cosmup/internal/installer"
-	"github.com/ignismeow/cosmup/internal/network"
-	"github.com/ignismeow/cosmup/internal/registry"
-	"github.com/ignismeow/cosmup/internal/store"
+	"github.com/saadaltafofficial/cosmup/internal/installer"
+	"github.com/saadaltafofficial/cosmup/internal/network"
+	"github.com/saadaltafofficial/cosmup/internal/registry"
+	"github.com/saadaltafofficial/cosmup/internal/store"
 )
 
 var version = "dev"
