@@ -43,7 +43,7 @@ Status:      does not match the network; run: cosmup install zigchain@v6.0.0
 - Binary URLs and checksums come from `chain.json` / `versions.json` in the registry. Both `?checksum=sha256:<hex>` and bare `?checksum=<hex>` are understood.
 - Archives (`.tar.gz`, `.zip`) and raw binaries are both supported; the format is detected from the file contents.
 - If the registry has no checksum for a binary, `cosmup` refuses to install it unless you pass `--insecure`.
-- `COSMUP_REGISTRY` points at another registry base URL (a fork, a mirror, or a local copy).
+- Only chains and versions listed in the official chain registry (`cosmos/chain-registry`) can be installed; the registry URL is not configurable.
 
 ## Limitations (MVP)
 

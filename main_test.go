@@ -67,7 +67,9 @@ func TestEndToEnd(t *testing.T) {
 	mux.HandleFunc("/dl/", func(w http.ResponseWriter, r *http.Request) { w.Write(bins[strings.TrimPrefix(r.URL.Path, "/dl/")]) })
 
 	t.Setenv("COSMUP_HOME", t.TempDir())
-	t.Setenv("COSMUP_REGISTRY", srv.URL)
+	defaultURL := registryURL
+	registryURL = srv.URL
+	t.Cleanup(func() { registryURL = defaultURL })
 
 	cosmup := func(wantCode int, args ...string) string {
 		t.Helper()

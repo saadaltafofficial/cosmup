@@ -26,6 +26,10 @@ import (
 
 var version = "dev"
 
+// registryURL is always the official chain registry. It is a variable only
+// so tests can point it at a fake registry.
+var registryURL = registry.DefaultBaseURL
+
 const usage = `cosmup - install and switch Cosmos chain binaries
 
 Usage:
@@ -37,7 +41,6 @@ Usage:
 
 <chain> is the chain's directory name in github.com/cosmos/chain-registry (e.g. zigchain, osmosis, cosmoshub).
 Binaries live in $COSMUP_HOME (default ~/.cosmup); add $COSMUP_HOME/bin to the front of your PATH.
-Set COSMUP_REGISTRY to use another registry base URL.
 `
 
 func main() {
@@ -63,14 +66,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "cosmup:", err)
 		return 1
 	}
-	base := os.Getenv("COSMUP_REGISTRY")
-	if base == "" {
-		base = registry.DefaultBaseURL
-	}
 	a := &app{
 		out:   stdout,
 		store: st,
-		reg:   &registry.Client{BaseURL: base, HTTP: &http.Client{Timeout: 30 * time.Second}},
+		reg:   &registry.Client{BaseURL: registryURL, HTTP: &http.Client{Timeout: 30 * time.Second}},
 		http:  &http.Client{},
 	}
 
