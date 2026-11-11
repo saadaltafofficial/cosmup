@@ -1,6 +1,11 @@
 package registry
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestParseBinary(t *testing.T) {
 	const h = "4373e53d7a05ff0f50037a1cd83801d5f0d972207e7ff50f3cc5d8ded62867a4"
@@ -40,5 +45,41 @@ func TestResolve(t *testing.T) {
 	}
 	if _, err := Resolve(ch, vs, "v9.9.9"); err == nil {
 		t.Error("expected error for unknown version")
+	}
+}
+
+func TestChainTestnetFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/osmosis/chain.json":
+			w.Write([]byte(`{"chain_name":"osmosis","daemon_name":"osmosisd"}`))
+		case "/testnets/osmosistestnet/chain.json":
+			w.Write([]byte(`{"chain_name":"osmosistestnet","daemon_name":"osmosisd"}`))
+		case "/testnets/osmosistestnet/versions.json":
+			w.Write([]byte(`{"versions":[{"name":"v29","tag":"v29.0.0"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	ctx := context.Background()
+
+	main, err := c.Chain(ctx, "osmosis")
+	if err != nil || main.Testnet() {
+		t.Fatalf("osmosis: %v testnet=%v", err, main != nil && main.Testnet())
+	}
+	tn, err := c.Chain(ctx, "osmosistestnet")
+	if err != nil || !tn.Testnet() {
+		t.Fatalf("osmosistestnet: %v", err)
+	}
+	vs, err := c.Versions(ctx, tn)
+	if err != nil || len(vs) != 1 || vs[0].Tag != "v29.0.0" {
+		t.Fatalf("testnet versions = %v, %v", vs, err)
+	}
+	for _, bad := range []string{"nochain", "../etc", "a/b", ""} {
+		if _, err := c.Chain(ctx, bad); err == nil {
+			t.Errorf("Chain(%q) succeeded", bad)
+		}
 	}
 }

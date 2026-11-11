@@ -21,11 +21,19 @@ type Chain struct {
 	Name       string  `json:"chain_name"`
 	ChainID    string  `json:"chain_id"`
 	DaemonName string  `json:"daemon_name"`
+	NodeHome   string  `json:"node_home"`
 	Codebase   Version `json:"codebase"`
 	APIs       struct {
 		REST []Endpoint `json:"rest"`
 	} `json:"apis"`
+
+	// dir is where the chain lives in the registry: "<name>" for mainnets,
+	// "testnets/<name>" for testnets.
+	dir string
 }
+
+// Testnet reports whether the chain came from the registry's testnets folder.
+func (c *Chain) Testnet() bool { return strings.HasPrefix(c.dir, "testnets/") }
 
 type Endpoint struct {
 	Address string `json:"address"`
@@ -74,14 +82,26 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// Chain fetches <chain>/chain.json.
+// Chain fetches <name>/chain.json, or testnets/<name>/chain.json if the
+// name is not a mainnet.
 func (c *Client) Chain(ctx context.Context, name string) (*Chain, error) {
+	if name == "" || strings.ContainsAny(name, "/\\.") {
+		return nil, fmt.Errorf("invalid chain name %q", name)
+	}
 	var ch Chain
-	if err := c.get(ctx, name+"/chain.json", &ch); err != nil {
-		if errors.Is(err, errNotFound) {
-			return nil, fmt.Errorf("chain %q is not in the chain registry", name)
+	var err error
+	for _, dir := range []string{name, "testnets/" + name} {
+		ch = Chain{}
+		if err = c.get(ctx, dir+"/chain.json", &ch); err == nil {
+			ch.dir = dir
+			break
 		}
-		return nil, err
+		if !errors.Is(err, errNotFound) {
+			return nil, err
+		}
+	}
+	if errors.Is(err, errNotFound) {
+		return nil, fmt.Errorf("chain %q is not in the chain registry", name)
 	}
 	if ch.DaemonName == "" {
 		return nil, fmt.Errorf("chain %q has no daemon_name in the registry", name)
@@ -89,12 +109,12 @@ func (c *Client) Chain(ctx context.Context, name string) (*Chain, error) {
 	return &ch, nil
 }
 
-// Versions fetches <chain>/versions.json. Chains without one return nil.
-func (c *Client) Versions(ctx context.Context, name string) ([]Version, error) {
+// Versions fetches the chain's versions.json. Chains without one return nil.
+func (c *Client) Versions(ctx context.Context, ch *Chain) ([]Version, error) {
 	var vf struct {
 		Versions []Version `json:"versions"`
 	}
-	if err := c.get(ctx, name+"/versions.json", &vf); err != nil {
+	if err := c.get(ctx, ch.dir+"/versions.json", &vf); err != nil {
 		if errors.Is(err, errNotFound) {
 			return nil, nil
 		}

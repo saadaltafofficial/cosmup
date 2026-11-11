@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -33,7 +35,7 @@ func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:
 
 func TestEndToEnd(t *testing.T) {
 	platform := runtime.GOOS + "/" + runtime.GOARCH
-	bins := map[string][]byte{"v5.1.2": fakeBinary("v5.1.2"), "v6.0.0": fakeBinary("v6.0.0"), "v4.0.0": fakeBinary("v4.0.0")}
+	bins := map[string][]byte{"v5.1.2": fakeBinary("v5.1.2"), "v6.0.0": fakeBinary("v6.0.0"), "v4.0.0": fakeBinary("v4.0.0"), "v7.0.0": fakeBinary("v7.0.0"), "v6.1.0": fakeBinary("v6.1.0")}
 
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
@@ -60,8 +62,13 @@ func TestEndToEnd(t *testing.T) {
 		ver("v4", "v4.0.0", binURL("v4.0.0", false)),
 		ver("v5", "v5.1.2", binURL("v5.1.2", true)),
 		ver("v6", "v6.0.0", binURL("v6.0.0", true)),
-		ver("v7", "v7.0.0", map[string]string{"plan9/mips": "https://x/y"}),
+		ver("v7", "v7.0.0", binURL("v7.0.0", true)),
+		ver("v8", "v8.0.0", map[string]string{"plan9/mips": "https://x/y"}),
 	}})
+	writeJSON("/testnets/zigchaintestnet/chain.json", map[string]any{
+		"chain_name": "zigchaintestnet", "daemon_name": "zigchaind",
+		"codebase": ver("", "v6.1.0", binURL("v6.1.0", true)),
+	})
 	writeJSON("/lcd/cosmos/base/tendermint/v1beta1/node_info", map[string]any{"application_version": map[string]string{"version": "v6.0.0"}})
 	writeJSON("/lcd/cosmos/upgrade/v1beta1/current_plan", map[string]any{"plan": map[string]string{"name": "v7", "height": "9000000"}})
 	mux.HandleFunc("/dl/", func(w http.ResponseWriter, r *http.Request) { w.Write(bins[strings.TrimPrefix(r.URL.Path, "/dl/")]) })
@@ -101,11 +108,37 @@ func TestEndToEnd(t *testing.T) {
 
 	expect(cosmup(0, "use", "zigchain@5.1.2"), "Active: zigchain v5.1.2")
 	expect(cosmup(0, "list"), "* zigchain       v5.1.2", "  zigchain       v6.0.0")
-	expect(cosmup(0, "list", "zigchain"), "v7.0.0       no "+platform+" binary", "  v6.0.0       recommended, installed", "* v5.1.2")
+	expect(cosmup(0, "list", "zigchain"), "v8.0.0       no "+platform+" binary", "  v7.0.0       \n", "  v6.0.0       recommended, installed", "* v5.1.2")
 
 	expect(cosmup(1, "use", "zigchain@v4.0.0"), "not installed (installed: v5.1.2, v6.0.0)")
-	expect(cosmup(1, "install", "zigchain@v7"), fmt.Sprintf("no %s binary for zigchain v7.0.0 (available: plan9/mips)", platform))
+	expect(cosmup(1, "install", "zigchain@v8"), fmt.Sprintf("no %s binary for zigchain v8.0.0 (available: plan9/mips)", platform))
 	expect(cosmup(1, "install", "zigchain@v4"), "lists no checksum", "--insecure")
 	expect(cosmup(0, "install", "zigchain@v4", "--insecure"), "WARNING: installed without checksum verification", "Active: zigchain v4.0.0")
 	expect(cosmup(1, "install", "nochain"), `chain "nochain" is not in the chain registry`)
+
+	// Testnets resolve from testnets/<name>; installing one takes over zigchaind.
+	expect(cosmup(0, "install", "zigchaintestnet"), "Active: zigchaintestnet v6.1.0", "zigchaind version: v6.1.0")
+	expect(cosmup(0, "list", "zigchaintestnet"), "* v6.1.0       recommended")
+
+	// update moves zigchain (which owns zigchaind again) to its recommended
+	// version, but leaves the testnet inactive.
+	expect(cosmup(0, "use", "zigchain@v4.0.0"), "Active: zigchain v4.0.0")
+	expect(cosmup(0, "update"), "== zigchain", "Active: zigchain v6.0.0",
+		"== zigchaintestnet", "Installed zigchaintestnet v6.1.0 (not activated: zigchaind belongs to another chain")
+	expect(cosmup(0, "list"), "* zigchain       v6.0.0", "  zigchaintestnet v6.1.0")
+
+	// cosmovisor: the upgrade binary goes into the node's cosmovisor folder.
+	nodeHome := t.TempDir()
+	t.Setenv("DAEMON_HOME", nodeHome)
+	expect(cosmup(1, "cosmovisor", "zigchain"), "no cosmovisor directory at "+nodeHome)
+	if err := os.MkdirAll(filepath.Join(nodeHome, "cosmovisor", "genesis", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	upgradeBin := filepath.Join(nodeHome, "cosmovisor", "upgrades", "v7", "bin", "zigchaind")
+	expect(cosmup(0, "cosmovisor", "zigchain"), `Network has upgrade "v7" scheduled at height 9000000`,
+		"Verified sha256", `Prepared upgrade "v7" (zigchain v7.0.0) at `+upgradeBin, "zigchaind version: v7.0.0")
+	expect(cosmup(0, "cosmovisor", "zigchain", "v7"), "already prepared")
+	expect(cosmup(1, "cosmovisor", "zigchain", "v9"), `upgrade "v9" of zigchain is not in the chain registry`)
+	expect(cosmup(1, "cosmovisor", "zigchain", "v8"), "no "+platform+" binary")
+	expect(cosmup(0, "list"), "* zigchain       v6.0.0") // cosmovisor prep doesn't change the active binary
 }

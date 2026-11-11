@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -37,9 +38,15 @@ Usage:
   cosmup use <chain>@<version>                    activate an installed version
   cosmup list [chain]                             installed versions, or a chain's versions in the registry
   cosmup check <chain>                            compare your binary with the version the network runs
+  cosmup update [--insecure]                      install the recommended version of every installed chain
+  cosmup cosmovisor <chain> [upgrade] [--insecure]
+                                                  put a verified upgrade binary in cosmovisor's upgrades folder
+                                                  (default: the upgrade scheduled on the network)
   cosmup version
 
-<chain> is the chain's directory name in github.com/cosmos/chain-registry (e.g. zigchain, osmosis, cosmoshub).
+<chain> is the chain's directory name in github.com/cosmos/chain-registry (e.g. zigchain, osmosis, cosmoshub),
+or a testnet's name under testnets/ (e.g. zigchaintestnet, osmosistestnet).
+cosmovisor uses $DAEMON_HOME, falling back to the chain's node_home from the registry.
 Binaries live in $COSMUP_HOME (default ~/.cosmup); add $COSMUP_HOME/bin to the front of your PATH.
 `
 
@@ -93,7 +100,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "cosmup", buildVersion())
 		return 0
 	case cmd == "install" && len(positional) == 1:
-		err = a.install(ctx, positional[0], insecure)
+		err = a.install(ctx, positional[0], insecure, true)
+	case cmd == "update" && len(positional) == 0:
+		err = a.update(ctx, insecure)
+	case cmd == "cosmovisor" && (len(positional) == 1 || len(positional) == 2):
+		err = a.prepareCosmovisor(ctx, positional, insecure)
 	case cmd == "use" && len(positional) == 1:
 		err = a.use(positional[0])
 	case cmd == "list" && len(positional) <= 1:
@@ -132,7 +143,7 @@ func splitSpec(spec string) (chain, ver string) {
 	return chain, ver
 }
 
-func (a *app) install(ctx context.Context, spec string, insecure bool) error {
+func (a *app) install(ctx context.Context, spec string, insecure, activate bool) error {
 	chainName, want := splitSpec(spec)
 	ch, err := a.reg.Chain(ctx, chainName)
 	if err != nil {
@@ -140,7 +151,7 @@ func (a *app) install(ctx context.Context, spec string, insecure bool) error {
 	}
 	var versions []registry.Version
 	if want != "" {
-		if versions, err = a.reg.Versions(ctx, chainName); err != nil {
+		if versions, err = a.reg.Versions(ctx, ch); err != nil {
 			return err
 		}
 	}
@@ -149,6 +160,29 @@ func (a *app) install(ctx context.Context, spec string, insecure bool) error {
 		return err
 	}
 
+	dest := a.store.BinaryPath(chainName, v.ID(), ch.DaemonName)
+	if _, err := os.Stat(dest); err == nil {
+		fmt.Fprintf(a.out, "%s %s is already installed\n", chainName, v.ID())
+	} else if err := a.fetch(ctx, chainName, v, ch.DaemonName, dest, insecure); err != nil {
+		return err
+	}
+	if !activate {
+		fmt.Fprintf(a.out, "Installed %s %s (not activated: %s belongs to another chain; run: cosmup use %s@%s)\n",
+			chainName, v.ID(), ch.DaemonName, chainName, v.ID())
+		return nil
+	}
+	if err := a.store.Activate(chainName, v.ID(), ch.DaemonName); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "Active: %s %s\n", chainName, v.ID())
+	a.smokeTest(ctx, dest, ch.DaemonName)
+	a.pathHint(ch.DaemonName)
+	return nil
+}
+
+// fetch downloads the version's binary for this platform to dest,
+// verifying it against the registry's checksum.
+func (a *app) fetch(ctx context.Context, chainName string, v registry.Version, daemon, dest string, insecure bool) error {
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	raw, ok := v.Binaries[platform]
 	if !ok {
@@ -166,32 +200,124 @@ func (a *app) install(ctx context.Context, spec string, insecure bool) error {
 	if art.SHA256 == "" && !insecure {
 		return fmt.Errorf("the registry lists no checksum for %s %s, so it can't be verified\n  rerun with --insecure to install it unverified", chainName, v.ID())
 	}
-
-	dest := a.store.BinaryPath(chainName, v.ID(), ch.DaemonName)
-	if _, err := os.Stat(dest); err == nil {
-		fmt.Fprintf(a.out, "%s %s is already installed\n", chainName, v.ID())
-	} else {
-		fmt.Fprintf(a.out, "Downloading %s %s (%s)\n", chainName, v.ID(), platform)
-		if err := installer.Install(ctx, a.http, art.URL, art.SHA256, ch.DaemonName, dest); err != nil {
-			return err
-		}
-		if art.SHA256 != "" {
-			fmt.Fprintf(a.out, "Verified sha256 %s\n", art.SHA256)
-		} else {
-			fmt.Fprintln(a.out, "WARNING: installed without checksum verification")
-		}
-	}
-	if err := a.store.Activate(chainName, v.ID(), ch.DaemonName); err != nil {
+	fmt.Fprintf(a.out, "Downloading %s %s (%s)\n", chainName, v.ID(), platform)
+	if err := installer.Install(ctx, a.http, art.URL, art.SHA256, daemon, dest); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.out, "Active: %s %s\n", chainName, v.ID())
-
-	if out, err := localVersion(ctx, dest); err != nil {
-		fmt.Fprintf(a.out, "WARNING: %s version failed: %v\n  CosmWasm chains may need libwasmvm installed separately.\n", ch.DaemonName, err)
+	if art.SHA256 != "" {
+		fmt.Fprintf(a.out, "Verified sha256 %s\n", art.SHA256)
 	} else {
-		fmt.Fprintf(a.out, "%s version: %s\n", ch.DaemonName, out)
+		fmt.Fprintln(a.out, "WARNING: installed without checksum verification")
 	}
-	a.pathHint(ch.DaemonName)
+	return nil
+}
+
+func (a *app) smokeTest(ctx context.Context, bin, daemon string) {
+	if out, err := localVersion(ctx, bin); err != nil {
+		fmt.Fprintf(a.out, "WARNING: %s version failed: %v\n  CosmWasm chains may need libwasmvm installed separately.\n", daemon, err)
+	} else {
+		fmt.Fprintf(a.out, "%s version: %s\n", daemon, out)
+	}
+}
+
+// update installs the recommended version of every installed chain. A
+// chain's new version is activated unless its daemon name is currently
+// active for a different chain (e.g. a testnet sharing zigchaind).
+func (a *app) update(ctx context.Context, insecure bool) error {
+	installed, err := a.store.Installed()
+	if err != nil {
+		return err
+	}
+	if len(installed) == 0 {
+		fmt.Fprintln(a.out, "Nothing installed yet. Try: cosmup install zigchain")
+		return nil
+	}
+	var chains []string
+	activeChain := map[string]string{} // daemon -> chain that owns bin/<daemon>
+	daemonOf := map[string]string{}
+	for _, in := range installed {
+		if daemonOf[in.Chain] == "" {
+			chains = append(chains, in.Chain)
+			daemonOf[in.Chain] = in.Daemon
+		}
+		if in.Active {
+			activeChain[in.Daemon] = in.Chain
+		}
+	}
+	var failed []string
+	for _, c := range chains {
+		fmt.Fprintf(a.out, "== %s\n", c)
+		owner := activeChain[daemonOf[c]]
+		if err := a.install(ctx, c, insecure, owner == "" || owner == c); err != nil {
+			fmt.Fprintln(a.out, "cosmup:", err)
+			failed = append(failed, c)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("update failed for: %s", strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+// prepareCosmovisor places a verified upgrade binary where cosmovisor (v1+)
+// looks for it: $DAEMON_HOME/cosmovisor/upgrades/<plan name>/bin/<daemon>.
+// With no upgrade name, it uses the upgrade scheduled on the network.
+func (a *app) prepareCosmovisor(ctx context.Context, args []string, insecure bool) error {
+	chainName := args[0]
+	ch, err := a.reg.Chain(ctx, chainName)
+	if err != nil {
+		return err
+	}
+	home := os.Getenv("DAEMON_HOME")
+	if home == "" {
+		home = os.ExpandEnv(ch.NodeHome)
+	}
+	if home == "" {
+		return errors.New("set DAEMON_HOME to your node's home directory")
+	}
+	cvDir := filepath.Join(home, "cosmovisor")
+	if st, err := os.Stat(cvDir); err != nil || !st.IsDir() {
+		return fmt.Errorf("no cosmovisor directory at %s\n  set DAEMON_HOME to the node home cosmovisor uses", cvDir)
+	}
+
+	plan := ""
+	if len(args) > 1 {
+		plan = args[1]
+	} else {
+		net, err := network.Query(ctx, a.http, restEndpoints(ch))
+		if err != nil {
+			return err
+		}
+		if net.Plan == nil {
+			return fmt.Errorf("no upgrade is scheduled on %s; pass the upgrade name: cosmup cosmovisor %s <upgrade>", chainName, chainName)
+		}
+		plan = net.Plan.Name
+		fmt.Fprintf(a.out, "Network has upgrade %q scheduled at height %s\n", plan, net.Plan.Height)
+	}
+
+	versions, err := a.reg.Versions(ctx, ch)
+	if err != nil {
+		return err
+	}
+	// Match against versions.json only: its entries carry the upgrade name.
+	v, err := registry.Resolve(&registry.Chain{Name: chainName}, versions, plan)
+	if err != nil {
+		return fmt.Errorf("upgrade %q of %s is not in the chain registry", plan, chainName)
+	}
+	if v.Name == "" {
+		return fmt.Errorf("the registry has no upgrade name for %s %s", chainName, v.ID())
+	}
+
+	dest := filepath.Join(cvDir, "upgrades", url.PathEscape(v.Name), "bin", ch.DaemonName)
+	if _, err := os.Stat(dest); err == nil {
+		fmt.Fprintf(a.out, "Upgrade %q (%s %s) is already prepared at %s\n", v.Name, chainName, v.ID(), dest)
+		return nil
+	}
+	if err := a.fetch(ctx, chainName, v, ch.DaemonName, dest, insecure); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "Prepared upgrade %q (%s %s) at %s\n", v.Name, chainName, v.ID(), dest)
+	a.smokeTest(ctx, dest, ch.DaemonName)
 	return nil
 }
 
@@ -243,7 +369,7 @@ func (a *app) list(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	versions, err := a.reg.Versions(ctx, chainName)
+	versions, err := a.reg.Versions(ctx, ch)
 	if err != nil {
 		return err
 	}
@@ -313,7 +439,7 @@ func (a *app) check(ctx context.Context, chainName string) (bool, error) {
 
 	if net.Plan != nil {
 		fmt.Fprintf(a.out, "Upgrade:     %q scheduled at height %s\n", net.Plan.Name, net.Plan.Height)
-		if versions, err := a.reg.Versions(ctx, chainName); err == nil {
+		if versions, err := a.reg.Versions(ctx, ch); err == nil {
 			if v, err := registry.Resolve(ch, versions, net.Plan.Name); err == nil {
 				fmt.Fprintf(a.out, "             prepare with: cosmup install %s@%s\n", chainName, v.ID())
 			}

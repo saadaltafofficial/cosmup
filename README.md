@@ -23,9 +23,12 @@ cosmup use zigchain@v5.1.0       # switch to an installed version
 cosmup list                      # installed versions; * marks the active one
 cosmup list zigchain             # versions in the registry, and which have a binary for your platform
 cosmup check zigchain            # compare your binary with what the live network runs
+cosmup update                    # move every installed chain to its recommended version
+cosmup install zigchaintestnet   # testnets work too (names from the registry's testnets/ folder)
+cosmup cosmovisor zigchain       # validators: stage the next upgrade's binary for cosmovisor
 ```
 
-`<chain>` is the chain's directory name in the chain registry.
+`<chain>` is the chain's directory name in the chain registry, or a testnet's name under `testnets/`.
 
 `cosmup check` runs your `zigchaind version`, either cosmup's or the one on your PATH. It asks the chain's public REST endpoints (from the registry) which version the network runs and whether an upgrade is scheduled. It exits 1 when your binary doesn't match the network, so you can use it in CI.
 
@@ -35,6 +38,20 @@ Network:     v6.0.0 (via https://api.zigchain.com)
 Registry:    v6.0.0 recommended
 Status:      does not match the network; run: cosmup install zigchain@v6.0.0
 ```
+
+### Preparing a cosmovisor upgrade
+
+`cosmup cosmovisor <chain> [upgrade]` downloads the upgrade's binary from the registry, verifies it, and puts it where cosmovisor looks for it:
+
+```
+$DAEMON_HOME/cosmovisor/upgrades/<upgrade name>/bin/<daemon>
+```
+
+With no upgrade name, it uses the upgrade currently scheduled on the network. `DAEMON_HOME` falls back to the chain's `node_home` from the registry (e.g. `~/.zigchain`), and the command refuses to run if there is no `cosmovisor` folder there. It doesn't touch the running node, cosmovisor's `current` link, or your active cosmup binary. Run it as the user cosmovisor runs as.
+
+### update and shared daemon names
+
+A mainnet and its testnet usually share a daemon name (`zigchaind`). `cosmup update` only switches the active binary for the chain that currently owns that name, so updating `zigchaintestnet` never replaces your mainnet `zigchaind`. It still installs the new testnet version; activate it with `cosmup use`.
 
 ## How it works
 
@@ -48,7 +65,6 @@ Status:      does not match the network; run: cosmup install zigchain@v6.0.0
 ## Limitations (MVP)
 
 - Linux and macOS only. Windows needs a different activation mechanism than symlinks.
-- Mainnets only: testnets live under `testnets/` in the registry.
 - Only as complete as the registry. Many chains list only `linux/amd64`, or have no checksum. `cosmup list <chain>` shows the gaps, and the fix is a PR to the registry.
 - Some CosmWasm chains ship binaries that dynamically link `libwasmvm`. `cosmup` warns if the installed binary fails to run, but it doesn't install the library.
 
