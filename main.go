@@ -44,10 +44,18 @@ Usage:
                                                   (default: the upgrade scheduled on the network)
   cosmup version
 
-<chain> is the chain's directory name in github.com/cosmos/chain-registry (e.g. zigchain, osmosis, cosmoshub),
-or a testnet's name under testnets/ (e.g. zigchaintestnet, osmosistestnet).
-cosmovisor uses $DAEMON_HOME, falling back to the chain's node_home from the registry.
-Binaries live in $COSMUP_HOME (default ~/.cosmup); add $COSMUP_HOME/bin to the front of your PATH.
+Chain names:
+  Use the chain's name from the Cosmos chain registry (github.com/cosmos/chain-registry),
+  not the name of its binary: cosmoshub, not gaiad. Testnets have their own names,
+  such as cosmoshubtestnet.
+
+Where things go:
+  cosmup keeps binaries in ~/.cosmup (set COSMUP_HOME to change it).
+  Put ~/.cosmup/bin first on your PATH so cosmup's binaries are the ones that run.
+
+cosmovisor:
+  cosmup cosmovisor writes into your node's home folder: $DAEMON_HOME if set,
+  otherwise the registry's default for the chain (~/.gaia for cosmoshub).
 `
 
 func main() {
@@ -222,14 +230,14 @@ func (a *app) smokeTest(ctx context.Context, bin, daemon string) {
 
 // update installs the recommended version of every installed chain. A
 // chain's new version is activated unless its daemon name is currently
-// active for a different chain (e.g. a testnet sharing zigchaind).
+// active for a different chain (e.g. a testnet sharing gaiad).
 func (a *app) update(ctx context.Context, insecure bool) error {
 	installed, err := a.store.Installed()
 	if err != nil {
 		return err
 	}
 	if len(installed) == 0 {
-		fmt.Fprintln(a.out, "Nothing installed yet. Try: cosmup install zigchain")
+		fmt.Fprintln(a.out, "Nothing installed yet. See what you can install with: cosmup list cosmoshub")
 		return nil
 	}
 	var chains []string
@@ -355,7 +363,7 @@ func (a *app) list(ctx context.Context, args []string) error {
 	}
 	if len(args) == 0 {
 		if len(installed) == 0 {
-			fmt.Fprintln(a.out, "Nothing installed yet. Try: cosmup install zigchain")
+			fmt.Fprintln(a.out, "Nothing installed yet. See what you can install with: cosmup list cosmoshub")
 			return nil
 		}
 		for _, in := range installed {
