@@ -4,6 +4,16 @@ All notable changes to cosmup are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-11
+
+### Added
+- Prebuilt release binaries for Linux and macOS (amd64 and arm64), with a `checksums.txt`, built by GoReleaser when a version tag is pushed. Release notes come from this changelog.
+- `install.sh`, a one-line installer: `curl -sSfL https://raw.githubusercontent.com/saadaltafofficial/cosmup/main/install.sh | sh`. It picks the right binary, verifies its SHA256, and installs into `~/.cosmup/bin`. `COSMUP_VERSION` pins a release.
+- CI on Linux and macOS: gofmt, `go vet` and `go test` on every push and pull request.
+
+### Changed
+- README: badges, a short check → install → check demo, the installer as the main install method, and release steps.
+
 ## [0.2.2] - 2026-11-11
 
 ### Added
@@ -57,7 +67,8 @@ Tagged on the same commit as 0.1.0, with no changes. The fix intended for this r
 - `cosmup check <chain>` compares your binary with the version the network runs and reports scheduled upgrades. It exits 1 on a mismatch.
 - Supports `.tar.gz` and `.zip` archives and raw binaries, on Linux and macOS.
 
-[Unreleased]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/saadaltafofficial/cosmup/compare/v0.1.4...v0.2.0

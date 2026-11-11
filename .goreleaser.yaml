@@ -1,0 +1,37 @@
+# Builds cosmup release binaries. Runs from .github/workflows/release.yml
+# when a v* tag is pushed. Check it locally with:
+#   goreleaser check && goreleaser release --snapshot --clean
+version: 2
+
+project_name: cosmup
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    # install.sh depends on this name: cosmup_<version>_<os>_<arch>.tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Release notes come from CHANGELOG.md (see the release workflow).
+changelog:
+  disable: true

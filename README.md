@@ -1,18 +1,46 @@
 # cosmup
 
+[![ci](https://github.com/saadaltafofficial/cosmup/actions/workflows/ci.yml/badge.svg)](https://github.com/saadaltafofficial/cosmup/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/saadaltafofficial/cosmup)](https://github.com/saadaltafofficial/cosmup/releases/latest)
+[![license](https://img.shields.io/github/license/saadaltafofficial/cosmup)](LICENSE)
+
 Install, switch and check Cosmos chain binaries (`gaiad`, `osmosisd`, ...) the way `nvm` or `rustup` handle runtimes.
 
 Cosmos chain binaries don't update themselves, and cosmovisor only manages binaries for a running node. `cosmup` is for everyone else: developers, CLI users and CI. It reads the [Cosmos chain registry](https://github.com/cosmos/chain-registry), downloads the binary for your platform, verifies its SHA256 and keeps several versions side by side.
 
+```console
+$ cosmup check osmosis
+Local:       v30.0.0 (/usr/local/bin/osmosisd)
+Network:     v31.0.0 (via https://lcd.osmosis.zone)
+Registry:    v31.0.0 recommended
+Status:      does not match the network; run: cosmup install osmosis@v31.0.0
+
+$ cosmup install osmosis
+Downloading osmosis v31.0.0 (linux/amd64)
+Verified sha256 d435408b845e79a2594594a315d9d22797fdbb7871a5936df68f51f0df557957
+Active: osmosis v31.0.0
+osmosisd version: 31.0.0
+
+$ cosmup check osmosis
+...
+Status:      up to date
+```
+
 ## Install
 
 ```sh
-go install github.com/saadaltafofficial/cosmup@latest
-
-# Add to your shell rc. ~/.cosmup/bin goes first so cosmup's binaries win over
-# older copies elsewhere on PATH; $(go env GOPATH)/bin is where go install put cosmup.
-export PATH="$HOME/.cosmup/bin:$(go env GOPATH)/bin:$PATH"
+curl -sSfL https://raw.githubusercontent.com/saadaltafofficial/cosmup/main/install.sh | sh
 ```
+
+The script downloads the release for your OS and CPU (Linux or macOS, amd64 or arm64), verifies its SHA256 against the release's `checksums.txt`, and installs `cosmup` into `~/.cosmup/bin`. Set `COSMUP_VERSION=v0.2.3` to pin a version. Binaries are also on the [releases page](https://github.com/saadaltafofficial/cosmup/releases).
+
+Then put `~/.cosmup/bin` first on your PATH, in your shell's rc file. It goes first so the binaries cosmup installs win over older copies elsewhere on PATH:
+
+```sh
+export PATH="$HOME/.cosmup/bin:$PATH"
+```
+
+With Go installed, you can instead build from source with `go install github.com/saadaltafofficial/cosmup@latest`. That puts `cosmup` in `$(go env GOPATH)/bin`, so add that folder to PATH too.
 
 ## Usage
 
@@ -84,6 +112,13 @@ A mainnet and its testnet usually share a binary name: `cosmoshub` and `cosmoshu
 ```sh
 go test ./...
 ```
+
+### Releasing
+
+1. Move the `Unreleased` entries in `CHANGELOG.md` under a new version heading, and add its compare link at the bottom.
+2. Commit, then tag and push: `git tag v0.2.3 && git push origin main v0.2.3`.
+
+Pushing the tag runs `.github/workflows/release.yml`. It runs the tests, then GoReleaser builds the binaries and `checksums.txt` and publishes the GitHub Release, with that version's changelog section as the release notes. The release fails if the changelog has no section for the tag. To check the GoReleaser config locally: `goreleaser check && goreleaser release --snapshot --clean`.
 
 The tests run the full CLI against a fake registry, fake binaries and a fake REST node, so they need no network.
 
