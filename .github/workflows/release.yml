@@ -15,9 +15,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Build with current Go; go.mod's version is only the minimum. Go 1.22
+      # builds macOS binaries without LC_UUID, which current macOS refuses to run.
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: stable
 
       - run: go test ./...
 

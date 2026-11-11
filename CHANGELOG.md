@@ -4,6 +4,11 @@ All notable changes to cosmup are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-11
+
+### Fixed
+- macOS release binaries are now built with current stable Go. The 0.2.3 binaries were built with Go 1.22, which produces macOS binaries without an LC_UUID load command that current macOS refuses to run. Linux binaries were not affected.
+
 ## [0.2.3] - 2026-11-11
 
 ### Added
@@ -67,7 +72,8 @@ Tagged on the same commit as 0.1.0, with no changes. The fix intended for this r
 - `cosmup check <chain>` compares your binary with the version the network runs and reports scheduled upgrades. It exits 1 on a mismatch.
 - Supports `.tar.gz` and `.zip` archives and raw binaries, on Linux and macOS.
 
-[Unreleased]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/saadaltafofficial/cosmup/compare/v0.2.0...v0.2.1

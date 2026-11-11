@@ -17,9 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Build with current Go; go.mod's version is only the minimum. Go 1.22
+      # builds macOS binaries without LC_UUID, which current macOS refuses to run.
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: stable
 
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
