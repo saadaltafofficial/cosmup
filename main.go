@@ -39,6 +39,8 @@ Usage:
   cosmup list [chain]                             installed versions, or a chain's versions in the registry
   cosmup check <chain>                            compare your binary with the version the network runs
   cosmup update [--insecure]                      install the recommended version of every installed chain
+  cosmup remove <chain>[@version]                 delete one installed version, or all of a chain's versions
+  cosmup prune                                    delete every version except the one each chain uses
   cosmup cosmovisor <chain> [upgrade] [--insecure]
                                                   put a verified upgrade binary in cosmovisor's upgrades folder
                                                   (default: the upgrade scheduled on the network)
@@ -109,6 +111,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 0
 	case cmd == "install" && len(positional) == 1:
 		err = a.install(ctx, positional[0], insecure, true)
+	case cmd == "remove" && len(positional) == 1:
+		err = a.remove(positional[0])
+	case cmd == "prune" && len(positional) == 0:
+		err = a.prune()
 	case cmd == "update" && len(positional) == 0:
 		err = a.update(ctx, insecure)
 	case cmd == "cosmovisor" && (len(positional) == 1 || len(positional) == 2):
@@ -265,6 +271,101 @@ func (a *app) update(ctx context.Context, insecure bool) error {
 		return fmt.Errorf("update failed for: %s", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// remove deletes one installed version (never the active one) or, with no
+// version, every installed version of the chain including its active link.
+func (a *app) remove(spec string) error {
+	chainName, want := splitSpec(spec)
+	installed, err := a.store.Installed()
+	if err != nil {
+		return err
+	}
+	var targets []store.Installation
+	var have []string
+	for _, in := range installed {
+		if in.Chain != chainName {
+			continue
+		}
+		have = append(have, in.Version)
+		if want == "" || strings.TrimPrefix(in.Version, "v") == strings.TrimPrefix(want, "v") {
+			targets = append(targets, in)
+		}
+	}
+	if len(have) == 0 {
+		return fmt.Errorf("%s is not installed", chainName)
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("%s %s is not installed (installed: %s)", chainName, want, orNone(have))
+	}
+	if want != "" && targets[0].Active {
+		return fmt.Errorf("%s %s is the active version; switch first with: cosmup use %s@<version>\n  or remove every version with: cosmup remove %s",
+			chainName, targets[0].Version, chainName, chainName)
+	}
+	return a.removeAll(targets)
+}
+
+// prune keeps one version per chain: the active one, or the most recently
+// installed one if none is active (e.g. a testnet sharing a binary name).
+func (a *app) prune() error {
+	installed, err := a.store.Installed()
+	if err != nil {
+		return err
+	}
+	keep := map[string]store.Installation{}
+	for _, in := range installed {
+		cur, ok := keep[in.Chain]
+		switch {
+		case !ok, in.Active:
+			keep[in.Chain] = in
+		case !cur.Active && a.store.InstalledAt(in).After(a.store.InstalledAt(cur)):
+			keep[in.Chain] = in
+		}
+	}
+	var targets []store.Installation
+	for _, in := range installed {
+		if keep[in.Chain] != in {
+			targets = append(targets, in)
+		}
+	}
+	if len(targets) == 0 {
+		fmt.Fprintln(a.out, "Nothing to prune: each chain has only one version installed")
+		return nil
+	}
+	return a.removeAll(targets)
+}
+
+func (a *app) removeAll(targets []store.Installation) error {
+	var freed int64
+	for _, in := range targets {
+		n, err := a.store.Remove(in)
+		if err != nil {
+			return fmt.Errorf("removing %s %s: %w", in.Chain, in.Version, err)
+		}
+		freed += n
+		note := ""
+		if in.Active {
+			note = fmt.Sprintf(" (was active; %s is no longer on cosmup's PATH)", in.Daemon)
+		}
+		fmt.Fprintf(a.out, "Removed %s %s, %s%s\n", in.Chain, in.Version, humanSize(n), note)
+	}
+	if len(targets) > 1 {
+		fmt.Fprintf(a.out, "Freed %s\n", humanSize(freed))
+	}
+	return nil
+}
+
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // prepareCosmovisor places a verified upgrade binary where cosmovisor (v1+)

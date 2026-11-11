@@ -141,4 +141,27 @@ func TestEndToEnd(t *testing.T) {
 	expect(cosmup(1, "cosmovisor", "zigchain", "v9"), `upgrade "v9" of zigchain is not in the chain registry`)
 	expect(cosmup(1, "cosmovisor", "zigchain", "v8"), "no "+platform+" binary")
 	expect(cosmup(0, "list"), "* zigchain       v6.0.0") // cosmovisor prep doesn't change the active binary
+
+	// remove and prune. Installed now: zigchain v4.0.0, v5.1.2, v6.0.0 (active),
+	// zigchaintestnet v6.1.0 (inactive, shares zigchaind).
+	expect(cosmup(1, "remove", "zigchain@v6.0.0"), "is the active version", "cosmup use zigchain@<version>")
+	expect(cosmup(1, "remove", "zigchain@v9"), "zigchain v9 is not installed (installed: v4.0.0, v5.1.2, v6.0.0)")
+	expect(cosmup(1, "remove", "nochain"), "nochain is not installed")
+	expect(cosmup(0, "remove", "zigchain@5.1.2"), "Removed zigchain v5.1.2, ")
+	expect(cosmup(0, "prune"), "Removed zigchain v4.0.0")
+	out := cosmup(0, "list")
+	expect(out, "* zigchain       v6.0.0", "  zigchaintestnet v6.1.0") // testnet kept: its only version
+	if strings.Contains(out, "v4.0.0") || strings.Contains(out, "v5.1.2") {
+		t.Fatalf("old versions still installed:\n%s", out)
+	}
+	expect(cosmup(0, "prune"), "Nothing to prune")
+	expect(cosmup(0, "remove", "zigchaintestnet"), "Removed zigchaintestnet v6.1.0")
+	expect(cosmup(0, "remove", "zigchain"), "Removed zigchain v6.0.0", "was active")
+	if _, err := os.Lstat(filepath.Join(os.Getenv("COSMUP_HOME"), "bin", "zigchaind")); !os.IsNotExist(err) {
+		t.Fatalf("active link still present: %v", err)
+	}
+	expect(cosmup(0, "list"), "Nothing installed yet")
+	if _, err := os.Stat(upgradeBin); err != nil {
+		t.Fatalf("remove touched the cosmovisor folder: %v", err)
+	}
 }

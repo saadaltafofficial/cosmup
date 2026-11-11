@@ -24,6 +24,9 @@ cosmup use osmosis@v30.0.0       # switch to an installed version
 cosmup list                      # installed versions; * marks the active one
 cosmup check cosmoshub           # compare your gaiad with what the live network runs
 cosmup update                    # move every installed chain to its recommended version
+cosmup remove osmosis@v30.0.0    # delete one installed version (not the active one)
+cosmup remove osmosis            # delete every installed version of a chain
+cosmup prune                     # keep only the version each chain uses; delete the rest
 cosmup install cosmoshubtestnet  # testnets work too (names from the registry's testnets/ folder)
 cosmup cosmovisor cosmoshub      # validators: stage the next upgrade's binary for cosmovisor
 ```
@@ -54,6 +57,12 @@ With no upgrade name, it uses the upgrade currently scheduled on the network. `D
 ### update and shared daemon names
 
 A mainnet and its testnet usually share a binary name: `cosmoshub` and `cosmoshubtestnet` both use `gaiad`. `cosmup update` only switches the active binary for the chain that currently owns that name, so updating `cosmoshubtestnet` never replaces your mainnet `gaiad`. It still installs the new testnet version; activate it with `cosmup use`.
+
+### Cleaning up
+
+`cosmup remove <chain>@<version>` won't delete the version you're using. Switch with `cosmup use` first, or remove the whole chain with `cosmup remove <chain>`. That also removes its binary from cosmup's PATH folder.
+
+`cosmup prune` keeps one version per chain: the active one, or the most recently installed one if the chain isn't active (for example a testnet that shares its binary name with the mainnet). Both commands only delete inside `~/.cosmup`. Binaries you installed elsewhere and cosmovisor folders are never touched.
 
 ## How it works
 

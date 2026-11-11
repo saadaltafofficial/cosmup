@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 type Store struct{ Root string }
@@ -102,4 +103,55 @@ func (s Store) Installed() ([]Installation, error) {
 func (s Store) isActive(chain, version, daemon string) bool {
 	target, err := os.Readlink(filepath.Join(s.BinDir(), daemon))
 	return err == nil && target == s.BinaryPath(chain, version, daemon)
+}
+
+// Remove deletes one installed version and returns the bytes it freed. If
+// that version is active, its bin/ link is removed too. An emptied chain
+// folder is removed as well.
+func (s Store) Remove(in Installation) (int64, error) {
+	dir := filepath.Dir(s.BinaryPath(in.Chain, in.Version, in.Daemon))
+	size, err := dirSize(dir)
+	if err != nil {
+		return 0, err
+	}
+	if s.isActive(in.Chain, in.Version, in.Daemon) {
+		if err := os.Remove(filepath.Join(s.BinDir(), in.Daemon)); err != nil {
+			return 0, err
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return 0, err
+	}
+	chainDir := filepath.Dir(dir)
+	if entries, err := os.ReadDir(chainDir); err == nil && len(entries) == 0 {
+		os.Remove(chainDir)
+	}
+	return size, nil
+}
+
+// InstalledAt is when a version was installed (its folder's mtime).
+func (s Store) InstalledAt(in Installation) time.Time {
+	st, err := os.Stat(filepath.Dir(s.BinaryPath(in.Chain, in.Version, in.Daemon)))
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime()
+}
+
+func dirSize(dir string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type().IsRegular() {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			total += info.Size()
+		}
+		return nil
+	})
+	return total, err
 }
