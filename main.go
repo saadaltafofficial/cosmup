@@ -360,7 +360,7 @@ func (a *app) pathHint(daemon string) {
 		return
 	}
 	if err == nil {
-		fmt.Fprintf(a.out, "NOTE: %s on your PATH is %s, not cosmup's.\n", daemon, found)
+		fmt.Fprintf(a.out, "NOTE: %s on your PATH resolves to %s, not %s.\n", daemon, found, link)
 	}
 	fmt.Fprintf(a.out, "Put cosmup first on your PATH:  export PATH=\"%s:$PATH\"\n", a.store.BinDir())
 }
