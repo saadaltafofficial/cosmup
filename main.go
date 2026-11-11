@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -90,7 +91,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	cmd := args[0]
 	switch {
 	case cmd == "version":
-		fmt.Fprintln(stdout, "cosmup", version)
+		fmt.Fprintln(stdout, "cosmup", buildVersion())
 		return 0
 	case cmd == "install" && len(positional) == 1:
 		err = a.install(ctx, positional[0], insecure)
@@ -113,6 +114,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// buildVersion prefers a version set with -ldflags, then the module version
+// that "go install module@version" records in the binary.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return version
 }
 
 func splitSpec(spec string) (chain, ver string) {
