@@ -4,7 +4,7 @@
 [![release](https://img.shields.io/github/v/release/saadaltafofficial/cosmup)](https://github.com/saadaltafofficial/cosmup/releases/latest)
 [![license](https://img.shields.io/github/license/saadaltafofficial/cosmup)](LICENSE)
 
-Install, switch and check Cosmos chain binaries (`gaiad`, `osmosisd`, ...) the way `nvm` or `rustup` handle runtimes.
+Install, switch and check Cosmos chain binaries (`gaiad`, `osmosisd`, ...).
 
 Cosmos chain binaries don't update themselves, and cosmovisor only manages binaries for a running node. `cosmup` is for everyone else: developers, CLI users and CI. It reads the [Cosmos chain registry](https://github.com/cosmos/chain-registry), downloads the binary for your platform, verifies its SHA256 and keeps several versions side by side.
 
