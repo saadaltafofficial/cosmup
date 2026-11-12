@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -163,5 +165,140 @@ func TestEndToEnd(t *testing.T) {
 	expect(cosmup(0, "list"), "Nothing installed yet")
 	if _, err := os.Stat(upgradeBin); err != nil {
 		t.Fatalf("remove touched the cosmovisor folder: %v", err)
+	}
+}
+
+// wasmZip is an Injective-style release: the daemon plus libwasmvm. The fake
+// daemon only runs when its folder is on the library path and the library
+// is there, like a real dynamically linked binary.
+func wasmZip(t *testing.T, ver string) []byte {
+	t.Helper()
+	daemon := "#!/bin/sh\n" +
+		"d=$(cd \"$(dirname \"$0\")\" && pwd)\n" +
+		"[ -f \"$d/libwasmvm.x86_64.so\" ] || { echo 'error while loading shared libraries: libwasmvm.x86_64.so' >&2; exit 127; }\n" +
+		"case \":$LD_LIBRARY_PATH:\" in *\":$d:\"*) echo " + ver + " ;; *) echo 'error while loading shared libraries: libwasmvm.x86_64.so' >&2; exit 127 ;; esac\n"
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range map[string]string{"wasmd": daemon, "libwasmvm.x86_64.so": "lib " + ver, "peggo": "other"} {
+		h := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		h.SetMode(0o755)
+		w, _ := zw.CreateHeader(h)
+		w.Write([]byte(body))
+	}
+	zw.Close()
+	return buf.Bytes()
+}
+
+func TestBundledLibraries(t *testing.T) {
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	bins := map[string][]byte{"v1.0.0": wasmZip(t, "v1.0.0"), "v2.0.0": wasmZip(t, "v2.0.0"), "plain": []byte("#!/bin/sh\necho v3.0.0\n")}
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	bin := func(k string) map[string]string {
+		return map[string]string{platform: srv.URL + "/dl/" + k + "?checksum=sha256:" + sha(bins[k])}
+	}
+	js := func(path string, v any) {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(v) })
+	}
+	js("/wasmchain/chain.json", map[string]any{"chain_name": "wasmchain", "daemon_name": "wasmd",
+		"codebase": map[string]any{"tag": "v2.0.0", "binaries": bin("v2.0.0")}})
+	js("/wasmchain/versions.json", map[string]any{"versions": []any{
+		map[string]any{"name": "v1", "tag": "v1.0.0", "binaries": bin("v1.0.0")},
+		map[string]any{"name": "v2", "tag": "v2.0.0", "binaries": bin("v2.0.0")},
+	}})
+	js("/plainchain/chain.json", map[string]any{"chain_name": "plainchain", "daemon_name": "plaind",
+		"codebase": map[string]any{"tag": "v3.0.0", "binaries": bin("plain")}})
+	mux.HandleFunc("/dl/", func(w http.ResponseWriter, r *http.Request) { w.Write(bins[strings.TrimPrefix(r.URL.Path, "/dl/")]) })
+
+	home := t.TempDir()
+	t.Setenv("COSMUP_HOME", home)
+	defaultURL := registryURL
+	registryURL = srv.URL
+	t.Cleanup(func() { registryURL = defaultURL })
+
+	cosmup := func(wantCode int, args ...string) string {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if code := run(context.Background(), args, &out, &errOut); code != wantCode {
+			t.Fatalf("cosmup %v: exit %d, want %d\n%s%s", args, code, wantCode, out.String(), errOut.String())
+		}
+		return out.String() + errOut.String()
+	}
+	expect := func(out string, subs ...string) {
+		t.Helper()
+		for _, s := range subs {
+			if !strings.Contains(out, s) {
+				t.Fatalf("output missing %q:\n%s", s, out)
+			}
+		}
+	}
+	runLink := func(daemon string) string {
+		t.Helper()
+		out, err := exec.Command(filepath.Join(home, "bin", daemon), "version").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s version: %v\n%s", daemon, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	link := filepath.Join(home, "bin", "wasmd")
+
+	// The bundled library is installed next to the binary, and bin/wasmd is
+	// a wrapper that puts that folder on the library path.
+	out := cosmup(0, "install", "wasmchain@v1.0.0")
+	expect(out, "Bundled libraries: libwasmvm.x86_64.so", "wasmd version: v1.0.0")
+	if strings.Contains(out, "WARNING") {
+		t.Fatalf("unexpected warning:\n%s", out)
+	}
+	if st, err := os.Lstat(link); err != nil || st.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("bin/wasmd should be a wrapper script, not a symlink: %v", err)
+	}
+	if got := runLink("wasmd"); got != "v1.0.0" {
+		t.Fatalf("bin/wasmd version = %q", got)
+	}
+
+	// Each version keeps its own library, and switching works both ways.
+	expect(cosmup(0, "install", "wasmchain"), "Active: wasmchain v2.0.0", "wasmd version: v2.0.0")
+	expect(cosmup(0, "list"), "* wasmchain      v2.0.0", "  wasmchain      v1.0.0")
+	expect(cosmup(0, "use", "wasmchain@v1.0.0"), "Active: wasmchain v1.0.0")
+	listOut := cosmup(0, "list")
+	expect(listOut, "* wasmchain      v1.0.0       wasmd")
+	if strings.Contains(listOut, "libwasmvm") {
+		t.Fatalf("list shows the library as a binary:\n%s", listOut)
+	}
+	if got := runLink("wasmd"); got != "v1.0.0" {
+		t.Fatalf("after use, bin/wasmd version = %q", got)
+	}
+	lib, _ := os.ReadFile(filepath.Join(home, "chains", "wasmchain", "v1.0.0", "libwasmvm.x86_64.so"))
+	if string(lib) != "lib v1.0.0" {
+		t.Fatalf("v1 folder has library %q", lib)
+	}
+	expect(cosmup(1, "remove", "wasmchain@v1.0.0"), "is the active version")
+
+	// Chains without bundled libraries still get a plain symlink.
+	expect(cosmup(0, "install", "plainchain"), "plaind version: v3.0.0")
+	if st, err := os.Lstat(filepath.Join(home, "bin", "plaind")); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("bin/plaind should be a symlink: %v", err)
+	}
+
+	// cosmovisor prep puts the library next to the upgrade binary and says
+	// cosmovisor won't use it on its own.
+	nodeHome := t.TempDir()
+	t.Setenv("DAEMON_HOME", nodeHome)
+	os.MkdirAll(filepath.Join(nodeHome, "cosmovisor"), 0o755)
+	expect(cosmup(0, "cosmovisor", "wasmchain", "v2"), `Prepared upgrade "v2"`, "wasmd version: v2.0.0",
+		"NOTE: this binary loads bundled libraries (libwasmvm.x86_64.so)", "LD_LIBRARY_PATH")
+	if _, err := os.Stat(filepath.Join(nodeHome, "cosmovisor", "upgrades", "v2", "bin", "libwasmvm.x86_64.so")); err != nil {
+		t.Fatalf("library not staged for cosmovisor: %v", err)
+	}
+
+	if entries, _ := os.ReadDir(filepath.Join(home, "bin")); len(entries) != 2 {
+		t.Fatalf("bin/ should hold only wasmd and plaind, has %v", entries)
+	}
+
+	// Removing the chain removes the wrapper too.
+	expect(cosmup(0, "remove", "wasmchain"), "Removed wasmchain v1.0.0", "was active", "Removed wasmchain v2.0.0")
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("wrapper still present: %v", err)
 	}
 }

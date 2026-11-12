@@ -96,6 +96,7 @@ A mainnet and its testnet usually share a binary name: `cosmoshub` and `cosmoshu
 
 - Binaries live in `~/.cosmup/chains/<chain>/<version>/<daemon>` (override with `COSMUP_HOME`).
 - `~/.cosmup/bin/<daemon>` is a symlink to the active version. Switching swaps the symlink atomically.
+- Some CosmWasm chains (Injective, for example) ship their release as an archive with the binary and the `libwasmvm` library it loads at startup. `cosmup` installs those libraries next to the binary, and `~/.cosmup/bin/<daemon>` becomes a small wrapper script that puts that folder on the library path. Each version keeps its own matching library, so `cosmup use` still switches cleanly, and nothing is written to system folders.
 - Binary URLs and checksums come from `chain.json` / `versions.json` in the registry. Both `?checksum=sha256:<hex>` and bare `?checksum=<hex>` are understood.
 - Archives (`.tar.gz`, `.zip`) and raw binaries are both supported; the format is detected from the file contents.
 - If the registry has no checksum for a binary, `cosmup` refuses to install it unless you pass `--insecure`.
@@ -105,7 +106,8 @@ A mainnet and its testnet usually share a binary name: `cosmoshub` and `cosmoshu
 
 - Linux and macOS only. Windows needs a different activation mechanism than symlinks.
 - Only as complete as the registry. Many chains list only `linux/amd64`, or have no checksum. `cosmup list <chain>` shows the gaps, and the fix is a PR to the registry.
-- Some CosmWasm chains ship binaries that dynamically link `libwasmvm`. `cosmup` warns if the installed binary fails to run, but it doesn't install the library.
+- If a chain's binary needs `libwasmvm` but its release doesn't include the library, `cosmup` warns that the binary fails to run; install the library yourself.
+- `cosmup cosmovisor` stages bundled libraries next to the upgrade binary, but cosmovisor runs the binary directly, without cosmup's wrapper. For those chains, make the library available to the node (copy it to `/usr/local/lib` and run `ldconfig`, or set `LD_LIBRARY_PATH` in the service).
 
 ## Development
 

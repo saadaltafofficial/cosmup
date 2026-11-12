@@ -2,6 +2,7 @@ package installer
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -56,7 +57,7 @@ func TestInstall(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "v6.0.0", "zigchaind")
-			err := Install(context.Background(), http.DefaultClient, serve(t, c.body), c.sha, "zigchaind", dest)
+			_, err := Install(context.Background(), http.DefaultClient, serve(t, c.body), c.sha, "zigchaind", dest)
 			if c.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("err = %v, want %q", err, c.wantErr)
@@ -75,5 +76,84 @@ func TestInstall(t *testing.T) {
 				t.Fatalf("got %q mode %v", got, st.Mode())
 			}
 		})
+	}
+}
+
+func zipOf(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range files {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write([]byte(body))
+	}
+	zw.Close()
+	return buf.Bytes()
+}
+
+func tarGzOf(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range files {
+		tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		tw.Write([]byte(body))
+	}
+	tw.Close()
+	gz.Close()
+	return buf.Bytes()
+}
+
+// Injective-style archives ship the daemon with libwasmvm next to it.
+func TestInstallBundledLibraries(t *testing.T) {
+	files := map[string]string{
+		"injectived":          payload,
+		"peggo":               "other tool",
+		"libwasmvm.x86_64.so": "lib",
+		"lib/libfoo.so.1.2":   "versioned lib",
+		"libwasmvm.dylib":     "mac lib",
+		"README.md":           "docs",
+		"../../evil.so":       "not a lib name, and must not escape",
+		"../../libescape.so":  "lib name, written inside dir only",
+	}
+	for name, body := range map[string][]byte{"zip": zipOf(t, files), "tar.gz": tarGzOf(t, files)} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			dest := filepath.Join(root, "chains", "injective", "v1.13.2", "injectived")
+			libs, err := Install(context.Background(), http.DefaultClient, serve(t, body), "", "injectived", dest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"libescape.so", "libfoo.so.1.2", "libwasmvm.dylib", "libwasmvm.x86_64.so"}
+			if strings.Join(libs, ",") != strings.Join(want, ",") {
+				t.Fatalf("libs = %v, want %v", libs, want)
+			}
+			entries, _ := os.ReadDir(filepath.Dir(dest))
+			var got []string
+			for _, e := range entries {
+				got = append(got, e.Name())
+			}
+			if strings.Join(got, ",") != "injectived,"+strings.Join(want, ",") {
+				t.Fatalf("version folder has %v", got)
+			}
+			if _, err := os.Stat(filepath.Join(root, "chains", "libescape.so")); err == nil {
+				t.Fatal("archive path escaped the version folder")
+			}
+		})
+	}
+}
+
+func TestIsSharedLib(t *testing.T) {
+	for name, want := range map[string]bool{
+		"libwasmvm.x86_64.so": true, "libwasmvm.aarch64.so": true, "libwasmvm.so.1": true,
+		"libwasmvm.dylib": true, "injectived": false, "evil.so": false, "README.md": false, "libnotes.txt": false,
+	} {
+		if IsSharedLib(name) != want {
+			t.Errorf("IsSharedLib(%q) = %v", name, !want)
+		}
 	}
 }

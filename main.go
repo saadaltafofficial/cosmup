@@ -177,7 +177,7 @@ func (a *app) install(ctx context.Context, spec string, insecure, activate bool)
 	dest := a.store.BinaryPath(chainName, v.ID(), ch.DaemonName)
 	if _, err := os.Stat(dest); err == nil {
 		fmt.Fprintf(a.out, "%s %s is already installed\n", chainName, v.ID())
-	} else if err := a.fetch(ctx, chainName, v, ch.DaemonName, dest, insecure); err != nil {
+	} else if _, err := a.fetch(ctx, chainName, v, ch.DaemonName, dest, insecure); err != nil {
 		return err
 	}
 	if !activate {
@@ -189,14 +189,15 @@ func (a *app) install(ctx context.Context, spec string, insecure, activate bool)
 		return err
 	}
 	fmt.Fprintf(a.out, "Active: %s %s\n", chainName, v.ID())
-	a.smokeTest(ctx, dest, ch.DaemonName)
+	// Run it through bin/, so a wrapper's library path applies.
+	a.smokeTest(ctx, filepath.Join(a.store.BinDir(), ch.DaemonName), ch.DaemonName, "")
 	a.pathHint(ch.DaemonName)
 	return nil
 }
 
 // fetch downloads the version's binary for this platform to dest,
 // verifying it against the registry's checksum.
-func (a *app) fetch(ctx context.Context, chainName string, v registry.Version, daemon, dest string, insecure bool) error {
+func (a *app) fetch(ctx context.Context, chainName string, v registry.Version, daemon, dest string, insecure bool) ([]string, error) {
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	raw, ok := v.Binaries[platform]
 	if !ok {
@@ -205,30 +206,35 @@ func (a *app) fetch(ctx context.Context, chainName string, v registry.Version, d
 			have = append(have, p)
 		}
 		sort.Strings(have)
-		return fmt.Errorf("the registry has no %s binary for %s %s (available: %s)", platform, chainName, v.ID(), orNone(have))
+		return nil, fmt.Errorf("the registry has no %s binary for %s %s (available: %s)", platform, chainName, v.ID(), orNone(have))
 	}
 	art, err := registry.ParseBinary(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if art.SHA256 == "" && !insecure {
-		return fmt.Errorf("the registry lists no checksum for %s %s, so it can't be verified\n  rerun with --insecure to install it unverified", chainName, v.ID())
+		return nil, fmt.Errorf("the registry lists no checksum for %s %s, so it can't be verified\n  rerun with --insecure to install it unverified", chainName, v.ID())
 	}
 	fmt.Fprintf(a.out, "Downloading %s %s (%s)\n", chainName, v.ID(), platform)
-	if err := installer.Install(ctx, a.http, art.URL, art.SHA256, daemon, dest); err != nil {
-		return err
+	libs, err := installer.Install(ctx, a.http, art.URL, art.SHA256, daemon, dest)
+	if err != nil {
+		return nil, err
 	}
 	if art.SHA256 != "" {
 		fmt.Fprintf(a.out, "Verified sha256 %s\n", art.SHA256)
 	} else {
 		fmt.Fprintln(a.out, "WARNING: installed without checksum verification")
 	}
-	return nil
+	if len(libs) > 0 {
+		fmt.Fprintf(a.out, "Bundled libraries: %s\n", strings.Join(libs, ", "))
+	}
+	return libs, nil
 }
 
-func (a *app) smokeTest(ctx context.Context, bin, daemon string) {
-	if out, err := localVersion(ctx, bin); err != nil {
-		fmt.Fprintf(a.out, "WARNING: %s version failed: %v\n  CosmWasm chains may need libwasmvm installed separately.\n", daemon, err)
+// smokeTest runs "<bin> version", with libDir on the library path if set.
+func (a *app) smokeTest(ctx context.Context, bin, daemon, libDir string) {
+	if out, err := localVersion(ctx, bin, libDir); err != nil {
+		fmt.Fprintf(a.out, "WARNING: %s version failed: %v\n  This release doesn't bundle the shared libraries it needs (often libwasmvm); install them separately.\n", daemon, err)
 	} else {
 		fmt.Fprintf(a.out, "%s version: %s\n", daemon, out)
 	}
@@ -422,11 +428,19 @@ func (a *app) prepareCosmovisor(ctx context.Context, args []string, insecure boo
 		fmt.Fprintf(a.out, "Upgrade %q (%s %s) is already prepared at %s\n", v.Name, chainName, v.ID(), dest)
 		return nil
 	}
-	if err := a.fetch(ctx, chainName, v, ch.DaemonName, dest, insecure); err != nil {
+	libs, err := a.fetch(ctx, chainName, v, ch.DaemonName, dest, insecure)
+	if err != nil {
 		return err
 	}
 	fmt.Fprintf(a.out, "Prepared upgrade %q (%s %s) at %s\n", v.Name, chainName, v.ID(), dest)
-	a.smokeTest(ctx, dest, ch.DaemonName)
+	if len(libs) == 0 {
+		a.smokeTest(ctx, dest, ch.DaemonName, "")
+		return nil
+	}
+	a.smokeTest(ctx, dest, ch.DaemonName, filepath.Dir(dest))
+	fmt.Fprintf(a.out, "NOTE: this binary loads bundled libraries (%s). cosmovisor runs it directly,\n"+
+		"  so make them available to the node before the upgrade: copy them to /usr/local/lib and run ldconfig,\n"+
+		"  or add %s to LD_LIBRARY_PATH in the cosmovisor service.\n", strings.Join(libs, ", "), filepath.Dir(dest))
 	return nil
 }
 
@@ -528,7 +542,7 @@ func (a *app) check(ctx context.Context, chainName string) (bool, error) {
 	}
 	local := ""
 	if bin != "" {
-		if local, err = localVersion(ctx, bin); err != nil {
+		if local, err = localVersion(ctx, bin, ""); err != nil {
 			return false, fmt.Errorf("%s version failed: %w", bin, err)
 		}
 	}
@@ -572,10 +586,16 @@ func restEndpoints(ch *registry.Chain) []string {
 }
 
 // localVersion runs "<bin> version". Older SDK versions print it to stderr.
-func localVersion(ctx context.Context, bin string) (string, error) {
+func localVersion(ctx context.Context, bin, libDir string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, bin, "version")
+	if libDir != "" {
+		cmd.Env = append(os.Environ(),
+			"LD_LIBRARY_PATH="+libDir+":"+os.Getenv("LD_LIBRARY_PATH"),
+			"DYLD_LIBRARY_PATH="+libDir+":"+os.Getenv("DYLD_LIBRARY_PATH"))
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
